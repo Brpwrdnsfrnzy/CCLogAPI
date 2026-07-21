@@ -1,0 +1,6 @@
+@CCLogAPI_HostAddress = http://localhost:5087
+
+GET {{CCLogAPI_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

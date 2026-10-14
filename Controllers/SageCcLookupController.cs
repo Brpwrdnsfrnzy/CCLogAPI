@@ -81,7 +81,18 @@ namespace CCLogAPI.Controllers
                 q = q.Where(x => EF.Functions.Like(x.weborder, $"%{wo}%"));
             }
 
-            return await q.ToListAsync();
+            try
+            {
+                return await q.ToListAsync();
+            }
+            catch (Exception ex)
+            {
+                // Log and return a friendly error for diagnostics
+                // Get a logger from the controller's HttpContext services
+                var logger = HttpContext.RequestServices.GetService(typeof(Microsoft.Extensions.Logging.ILogger<SageCcLookupController>)) as Microsoft.Extensions.Logging.ILogger;
+                logger?.LogError(ex, "Error searching Sage CC lookup");
+                return StatusCode(500, new { error = "Error searching Sage CC lookup", details = ex.Message });
+            }
         }
 
         // GET: SageCcLookup/by-account/12345678
@@ -110,11 +121,20 @@ namespace CCLogAPI.Controllers
         [HttpGet("by-order/{orderNumber}")]
         public async Task<ActionResult<IEnumerable<SageBrisCcLu>>> GetByOrder(string orderNumber)
         {
-            var results = await _context.SageBrisCcLus
-                .Where(s => s.ORDER_NUMBER.EndsWith(orderNumber) || s.ORDER_NUMBER == orderNumber)
-                .ToListAsync();
+            try
+            {
+                var results = await _context.SageBrisCcLus
+                    .Where(s => s.ORDER_NUMBER.EndsWith(orderNumber) || s.ORDER_NUMBER == orderNumber)
+                    .ToListAsync();
 
-            return results;
+                return results;
+            }
+            catch (Exception ex)
+            {
+                var logger = HttpContext.RequestServices.GetService(typeof(Microsoft.Extensions.Logging.ILogger<SageCcLookupController>)) as Microsoft.Extensions.Logging.ILogger;
+                logger?.LogError(ex, "Error looking up Sage CC by order {OrderNumber}", orderNumber);
+                return StatusCode(500, new { error = "Error looking up Sage CC by order", details = ex.Message });
+            }
         }
 
         // GET: SageCcLookup/by-invoice/INV123

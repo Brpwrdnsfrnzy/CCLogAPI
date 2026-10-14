@@ -1,228 +1,278 @@
-using System.Text;
 using CCLogAPI.Models;
-using CCLogAPI.Services;
 using AutoMapper;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.AspNetCore.Identity;
-using Microsoft.IdentityModel.Tokens;
 using Microsoft.EntityFrameworkCore;
-using Serilog;
+using Microsoft.AspNetCore.Identity;
+using CCLogAPI.Services;
+using Microsoft.AspNetCore.Diagnostics;
+using Microsoft.AspNetCore.Http;
 
-// Ensure logs directory exists
-var logsDirectory = Path.Combine(Directory.GetCurrentDirectory(), "logs");
-if (!Directory.Exists(logsDirectory))
+var builder = WebApplication.CreateBuilder(args);
+
+// Add services to the container.
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+// Configure CORS to allow the front-end origin(s)
+var webAppBase = builder.Configuration["WebAppBaseUrl"]?.Trim();
+// Build a conservative set of allowed origins including common variants
+var origins = new List<string>();
+if (!string.IsNullOrWhiteSpace(webAppBase))
 {
-    Directory.CreateDirectory(logsDirectory);
-}
-
-Serilog.Log.Logger = new LoggerConfiguration()
-    .WriteTo.File("logs/api.log", rollingInterval: RollingInterval.Day)
-    .CreateLogger();
-
-try
-{
-    Serilog.Log.Information("Starting CCLog API");
-
-    var builder = WebApplication.CreateBuilder(args);
-
-    builder.Logging.ClearProviders();
-    builder.Logging.AddSerilog();
-
-    const string CorsPolicyName = "AllowFrontend";
-
-    // Add services to the container.
-
-    builder.Services.AddControllers()
-        .AddJsonOptions(options =>
-        {
-            options.JsonSerializerOptions.ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles;
-        });
-
-    // Register EF Core DbContext with connection string from configuration
-    builder.Services.AddDbContext<CCLogContext>(options =>
-        options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
-
-    // Register Sage200 DbContext (read-only, for SS_Bris_cust view)
-    builder.Services.AddDbContext<SageContext>(options =>
-        options.UseSqlServer(builder.Configuration.GetConnectionString("SageConnection")));
-
-    // Identity - use AddIdentityCore for API (not AddIdentity which is for cookie auth)
-    builder.Services.AddIdentityCore<User>(options =>
-    {
-        options.Password.RequireDigit = true;
-        options.Password.RequiredLength = 8;
-        options.Password.RequireNonAlphanumeric = false;
-        options.Password.RequireUppercase = false;
-        options.Password.RequireLowercase = false;
-    })
-        .AddRoles<IdentityRole<int>>()
-        .AddEntityFrameworkStores<CCLogContext>()
-        .AddSignInManager<SignInManager<User>>()
-        .AddDefaultTokenProviders();
-
-    // JWT configuration - set Jwt:Key in secrets or appsettings
-    var jwtKey = builder.Configuration["Jwt:Key"] ?? "ReplaceThisWithAStrongSecretInUserSecrets";
-    var key = Encoding.UTF8.GetBytes(jwtKey);
-
-    builder.Services.AddAuthentication(options =>
-    {
-        options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-        options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-    })
-    .AddJwtBearer(options =>
-    {
-        options.TokenValidationParameters = new TokenValidationParameters
-        {
-            ValidateIssuerSigningKey = true,
-            IssuerSigningKey = new SymmetricSecurityKey(key),
-            ValidateIssuer = false,
-            ValidateAudience = false,
-            ClockSkew = TimeSpan.Zero
-        };
-    });
-
-    builder.Services.AddAuthorization(options =>
-    {
-        // Override Identity's default "require authenticated user" policy
-        options.DefaultPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
-            .RequireAssertion(_ => true) // Allow all by default
-            .Build();
-        options.FallbackPolicy = null;
-    });
-
-    // Register AutoMapper (requires AutoMapper.Extensions.Microsoft.DependencyInjection package)
-    builder.Services.AddAutoMapper(typeof(MappingProfile));
-
-    // Email and scheduled reporting
-    builder.Services.Configure<EmailSettings>(builder.Configuration.GetSection("Email"));
-    builder.Services.AddScoped<IEmailService, EmailService>();
-    builder.Services.AddScoped<DailyReportJob>();
-    builder.Services.AddScoped<ReminderCheckJob>();
-    builder.Services.AddScoped<EscalationCheckJob>();
-    builder.Services.AddHostedService<DailyReportScheduler>();
-
-    // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
-    builder.Services.AddOpenApi();
-
-    // CORS: allow the Blazor frontend to call the API
-    builder.Services.AddCors(options =>
-    {
-        options.AddPolicy(CorsPolicyName, policy =>
-        {
-            policy.WithOrigins(
-                "http://www.cclogs.net",
-                "http://cclogs.net",
-                "https://www.cclogs.net",
-                "https://cclogs.net",
-                "http://www.cclogsapi.net",
-                "http://cclogsapi.net",
-                "https://www.cclogsapi.net",
-                "https://cclogsapi.net",
-                "https://localhost:7260",  // Local Blazor app
-                "http://localhost:7260",
-                "https://localhost:5000",   // Common dev ports
-                "http://localhost:5000"
-            )
-            .AllowAnyHeader()
-            .AllowAnyMethod()
-            .AllowCredentials();
-        });
-    });
-
-    var app = builder.Build();
-
-    // Seed admin user
-    using (var scope = app.Services.CreateScope())
-    {
-        var userManager = scope.ServiceProvider.GetRequiredService<UserManager<User>>();
-        await SeedAdminUser(userManager);
-    }
-
-    // Configure the HTTP request pipeline.
-    if (app.Environment.IsDevelopment())
-    {
-        app.MapOpenApi();
-    }
-
-    // Add exception handler middleware to catch unhandled exceptions
-    app.UseExceptionHandler(errorApp =>
-    {
-        errorApp.Run(async context =>
-        {
-            context.Response.StatusCode = 500;
-            context.Response.ContentType = "application/json";
-
-            var error = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>();
-            if (error != null)
-            {
-                Serilog.Log.Error(error.Error, "Unhandled exception in API request");
-                await context.Response.WriteAsync(System.Text.Json.JsonSerializer.Serialize(new
-                {
-                    error = "An error occurred processing your request.",
-                    details = error.Error.Message
-                }));
-            }
-        });
-    });
-
-    // CORS must come before Authentication/Authorization
-    app.UseCors(CorsPolicyName);
-
-    app.UseAuthentication();
-    app.UseAuthorization();
-
-    app.MapControllers();
-
-    Serilog.Log.Information("CCLog API started successfully");
-    app.Run();
-}
-catch (Exception ex)
-{
-    Serilog.Log.Fatal(ex, "CCLog API failed to start");
-    throw;
-}
-finally
-{
-    Serilog.Log.CloseAndFlush();
-}
-
-async Task SeedAdminUser(UserManager<User> userManager)
-{
+    origins.Add(webAppBase);
+    // Add https/http variants and with/without www
     try
     {
-        const string adminUsername = "rlockwood";
-        const string adminEmail = "rlockwood@brisant-secure.com";
-
-        var existingUser = await userManager.FindByNameAsync(adminUsername);
-        if (existingUser == null)
+        var uri = new Uri(webAppBase);
+        var host = uri.Host;
+        var scheme = uri.Scheme;
+        var otherScheme = scheme == "https" ? "http" : "https";
+        origins.Add($"{otherScheme}://{host}");
+        if (!host.StartsWith("www."))
         {
-            var adminUser = new User
-            {
-                UserName = adminUsername,
-                Email = adminEmail,
-                Name = "Administrator",
-                Role = 1,
-                Team = 1,
-                EmailConfirmed = true
-            };
+            origins.Add($"{scheme}://www.{host}");
+            origins.Add($"{otherScheme}://www.{host}");
+        }
+        else
+        {
+            var withoutWww = host.Substring(4);
+            origins.Add($"{scheme}://{withoutWww}");
+            origins.Add($"{otherScheme}://{withoutWww}");
+        }
+    }
+    catch { /* ignore parse errors */ }
+}
+// Common local dev origins
+origins.Add("http://localhost:5000");
+origins.Add("http://localhost:5001");
+// Known front-end origins (production and staging)
+origins.Add("http://cclogs.net");
+origins.Add("http://www.cclogs.net");
+origins.Add("http://staging.cclogs.net");
+origins = origins.Where(s => !string.IsNullOrWhiteSpace(s)).Distinct().ToList();
 
-            var result = await userManager.CreateAsync(adminUser, "ziggy321");
-            if (result.Succeeded)
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("DefaultCorsPolicy", policy =>
+    {
+        // Restrict CORS to the known front-end origins.
+        policy.WithOrigins(origins.ToArray())
+              .AllowAnyHeader()
+              .AllowAnyMethod();
+        // Note: do not call AllowCredentials() unless the frontend needs to send
+        // cookies or other credentials. If you enable credentials you cannot use '*'.
+    });
+});
+
+// AutoMapper
+builder.Services.AddAutoMapper(typeof(MappingProfile));
+
+// Register EF DbContext using DefaultConnection if available; otherwise rely on CCLogContext.OnConfiguring fallback
+var conn = builder.Configuration.GetConnectionString("DefaultConnection");
+if (!string.IsNullOrWhiteSpace(conn))
+{
+    builder.Services.AddDbContext<CCLogContext>(options => options.UseSqlServer(conn));
+}
+// Register read-only Sage DB context if configured
+var sageConn = builder.Configuration.GetConnectionString("SageConnection");
+if (!string.IsNullOrWhiteSpace(sageConn))
+{
+    builder.Services.AddDbContext<SageContext>(options => options.UseSqlServer(sageConn));
+}
+
+// Register ASP.NET Core Identity using the EF Core context with int keys
+builder.Services.AddIdentity<User, IdentityRole<int>>(options =>
+{
+    // Keep defaults but allow configuration via appsettings if needed
+    options.User.RequireUniqueEmail = true;
+})
+    .AddEntityFrameworkStores<CCLogContext>()
+    .AddDefaultTokenProviders();
+
+// Email service configuration
+builder.Services.Configure<EmailSettings>(builder.Configuration.GetSection("Email"));
+builder.Services.AddScoped<IEmailService, EmailService>();
+
+var app = builder.Build();
+
+// Perform startup health checks (DB connectivity, etc.) and log clear diagnostics.
+try
+{
+    using var startupScope = app.Services.CreateScope();
+    var startupLogger = startupScope.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("StartupChecks");
+    var db = startupScope.ServiceProvider.GetService<CCLogContext>();
+    if (db == null)
+    {
+        startupLogger?.LogWarning("CCLogContext is not registered. Skipping DB connectivity check.");
+    }
+    else
+    {
+        try
+        {
+            // Use CanConnect which performs a lightweight connectivity check.
+            var canConnect = db.Database.CanConnect();
+            if (canConnect)
             {
-                Serilog.Log.Information("✅ Admin user seeded successfully.");
+                startupLogger?.LogInformation("Database connectivity check passed.");
             }
             else
             {
-                Serilog.Log.Error("❌ Failed to seed admin user:");
-                foreach (var error in result.Errors)
-                {
-                    Serilog.Log.Error($"  - {error.Description}");
-                }
+                startupLogger?.LogError("Database connectivity check failed: unable to connect to the configured database. Verify connection string, network, and credentials.");
+            }
+        }
+        catch (Exception ex)
+        {
+            startupLogger?.LogError(ex, "Exception while checking database connectivity. Connection string in use: {Connection}", builder.Configuration.GetConnectionString("DefaultConnection") ?? "(none)");
+        }
+    }
+}
+catch (Exception ex)
+{
+    // Ensure any unexpected error during startup checks is logged but does not crash the host.
+    var tmpLogger = app.Services.GetService<ILoggerFactory>()?.CreateLogger("StartupChecks");
+    tmpLogger?.LogError(ex, "Unexpected error during startup health checks.");
+}
+
+// Configure the HTTP request pipeline.
+if (app.Environment.IsDevelopment() || app.Environment.IsStaging())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+// Diagnostic middleware: log requests and provide an explicit OPTIONS fallback for CORS preflight.
+// This helps verify whether requests reach the app and ensures an Access-Control-Allow-* header is returned
+// even if something upstream short-circuits the pipeline.
+// Global exception handler that ensures CORS headers are present on error responses
+// so browser clients receive an Access-Control-Allow-Origin even when a 500 occurs.
+app.UseExceptionHandler(errorApp =>
+{
+    errorApp.Run(async context =>
+    {
+        var loggerFactory = app.Services.GetService<ILoggerFactory>();
+        var logger = loggerFactory?.CreateLogger("GlobalException");
+        var originHeader = context.Request.Headers["Origin"].ToString();
+        if (!string.IsNullOrWhiteSpace(originHeader) && origins.Contains(originHeader, StringComparer.OrdinalIgnoreCase))
+        {
+            context.Response.Headers["Access-Control-Allow-Origin"] = originHeader;
+            if (!context.Response.Headers.ContainsKey("Vary"))
+                context.Response.Headers["Vary"] = "Origin";
+        }
+
+        var exceptionFeature = context.Features.Get<IExceptionHandlerFeature>();
+        if (exceptionFeature?.Error != null)
+        {
+            logger?.LogError(exceptionFeature.Error, "Unhandled exception while processing request {Method} {Path}", context.Request.Method, context.Request.Path);
+        }
+
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        context.Response.ContentType = "application/json";
+
+        // In Staging or Development, include exception details to aid debugging.
+        var isDebugEnv = app.Environment.IsDevelopment() || app.Environment.IsStaging();
+        if (isDebugEnv && exceptionFeature?.Error != null)
+        {
+            var msg = exceptionFeature.Error.Message?.Replace("\r\n", " ").Replace("\n", " ");
+            var stack = exceptionFeature.Error.StackTrace?.Replace("\r\n", " ").Replace("\n", " ");
+            var payload = new
+            {
+                error = "An unexpected error occurred.",
+                details = System.Text.Encodings.Web.JavaScriptEncoder.Default.Encode(msg ?? string.Empty),
+                stack = System.Text.Encodings.Web.JavaScriptEncoder.Default.Encode(stack ?? string.Empty)
+            };
+            var json = System.Text.Json.JsonSerializer.Serialize(payload);
+            await context.Response.WriteAsync(json);
+        }
+        else
+        {
+            await context.Response.WriteAsync("{\"error\":\"An unexpected error occurred.\"}");
+        }
+    });
+});
+app.Use(async (context, next) =>
+{
+    var loggerFactory = app.Services.GetService<ILoggerFactory>();
+    var logger = loggerFactory?.CreateLogger("CorsDebug");
+    var origin = context.Request.Headers["Origin"].ToString();
+    logger?.LogInformation("Incoming request: {Method} {Path} Origin={Origin}", context.Request.Method, context.Request.Path, origin);
+
+    if (string.Equals(context.Request.Method, "OPTIONS", StringComparison.OrdinalIgnoreCase))
+    {
+        // For diagnostics, log OPTIONS preflight but do NOT short-circuit here.
+        // Let the CORS middleware (registered later) handle preflight responses so
+        // the configured policy is consistently applied by the framework.
+        logger?.LogDebug("OPTIONS request received; forwarding to CORS middleware for handling.");
+        await next();
+        return;
+    }
+
+    await next();
+});
+
+// Lightweight preflight handler: respond to OPTIONS early with the proper CORS headers
+// This ensures preflight requests get a deterministic response even if something
+// upstream or later middleware would otherwise fail.
+app.Use(async (context, next) =>
+{
+    try
+    {
+        if (string.Equals(context.Request.Method, "OPTIONS", StringComparison.OrdinalIgnoreCase))
+        {
+            var origin = context.Request.Headers["Origin"].ToString();
+            var loggerFactory = app.Services.GetService<ILoggerFactory>();
+            var logger = loggerFactory?.CreateLogger("PreflightHandler");
+            logger?.LogDebug("Preflight request for {Path} from {Origin}", context.Request.Path, origin);
+
+            if (!string.IsNullOrWhiteSpace(origin) && origins.Contains(origin, StringComparer.OrdinalIgnoreCase))
+            {
+                context.Response.Headers["Access-Control-Allow-Origin"] = origin;
+                context.Response.Headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,DELETE,OPTIONS";
+                // Echo requested headers if present, otherwise allow common headers
+                var reqHeaders = context.Request.Headers["Access-Control-Request-Headers"].ToString();
+                context.Response.Headers["Access-Control-Allow-Headers"] = string.IsNullOrWhiteSpace(reqHeaders) ? "*" : reqHeaders;
+                context.Response.Headers["Vary"] = "Origin";
+                context.Response.StatusCode = StatusCodes.Status204NoContent;
+                return;
             }
         }
     }
     catch (Exception ex)
     {
-        Serilog.Log.Error(ex, "Error seeding admin user");
+        var loggerFactory = app.Services.GetService<ILoggerFactory>();
+        var logger = loggerFactory?.CreateLogger("PreflightHandler");
+        logger?.LogError(ex, "Error handling preflight request for {Path}", context.Request.Path);
+        // Ensure we still return a response (with no CORS header) so callers see an error rather than nothing
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        await context.Response.WriteAsync("Preflight handler error");
+        return;
     }
-}
+
+    await next();
+});
+app.UseRouting();
+app.UseCors("DefaultCorsPolicy");
+// Ensure CORS header is present on all responses when an Origin header was sent.
+// This is a defensive fallback for environments where the CORS middleware
+// may be bypassed (proxies/reverse-proxies or middleware ordering differences).
+app.Use(async (context, next) =>
+{
+    await next();
+
+    // If the request included an Origin header and the response doesn't already
+    // have an Access-Control-Allow-Origin header, add one matching the policy.
+    if (context.Request.Headers.ContainsKey("Origin") && !context.Response.Headers.ContainsKey("Access-Control-Allow-Origin"))
+    {
+        var origin = context.Request.Headers["Origin"].ToString();
+        if (!string.IsNullOrWhiteSpace(origin) && origins.Contains(origin, StringComparer.OrdinalIgnoreCase))
+        {
+            context.Response.Headers["Access-Control-Allow-Origin"] = origin;
+            if (!context.Response.Headers.ContainsKey("Vary"))
+                context.Response.Headers["Vary"] = "Origin";
+        }
+    }
+});
+app.UseAuthorization();
+
+app.MapControllers();
+
+app.Run();

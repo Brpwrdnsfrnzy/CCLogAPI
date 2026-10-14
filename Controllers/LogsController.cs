@@ -111,8 +111,17 @@ namespace CCLogAPI.Controllers
 
         if (!string.IsNullOrWhiteSpace(req.Text))
         {
-            var text = req.Text.Trim();
-            q = q.Where(l => EF.Functions.Like(l.LogText, $"%{text}%"));
+            var lowered = req.Text.Trim().ToLower();
+            var pattern = $"%{lowered}%";
+            // Case-insensitive search across LogText, customer phone, email, contact/name, company and any related diary entries
+            q = q.Where(l =>
+                (l.LogText != null && EF.Functions.Like(l.LogText.ToLower(), pattern))
+                || (l.CustomerPhone != null && EF.Functions.Like(l.CustomerPhone.ToLower(), pattern))
+                || (l.CustomerEmail != null && EF.Functions.Like(l.CustomerEmail.ToLower(), pattern))
+                || (l.CustomerContact != null && EF.Functions.Like(l.CustomerContact.ToLower(), pattern))
+                || (l.CustomerCompany != null && EF.Functions.Like(l.CustomerCompany.ToLower(), pattern))
+                || l.DiaryEntries.Any(de => de.Text != null && EF.Functions.Like(de.Text.ToLower(), pattern))
+            );
         }
 
         if (req.ReportedIssueId.HasValue)
@@ -149,6 +158,95 @@ namespace CCLogAPI.Controllers
         public async Task<ActionResult<IEnumerable<Log>>> GetLogs()
         {
             return await _context.Logs.ToListAsync();
+        }
+
+        // GET: Logs/by-order/{orderNo}
+        // Normalises by stripping leading zeros so that padded (e.g. 0000450321)
+        // and unpadded (e.g. 450321) values match. Uses a candidate IN list so
+        // the query stays SARGable and EF can translate it to SQL.
+        [HttpGet("by-order/{orderNo}")]
+        public async Task<ActionResult<IEnumerable<Log>>> GetLogsByOrder(string orderNo)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(orderNo))
+                {
+                    return BadRequest("orderNo is required.");
+                }
+
+                var candidates = BuildZeroPaddedCandidates(orderNo);
+                if (candidates.Count == 0)
+                {
+                    return Ok(Array.Empty<Log>());
+                }
+
+                var results = await _context.Logs
+                    .Where(l => l.OrderNo != null && candidates.Contains(l.OrderNo))
+                    .OrderByDescending(l => l.DateLogged)
+                    .ToListAsync();
+
+                return Ok(results);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "Error searching for order {OrderNo}", orderNo);
+                return StatusCode(500, new { error = "Error searching for order", details = ex.Message });
+            }
+        }
+
+        // GET: Logs/by-invoice/{invoiceNo}
+        // Normalises by stripping leading zeros so that padded (e.g. 0000450321)
+        // and unpadded (e.g. 450321) values match. Uses a candidate IN list so
+        // the query stays SARGable and EF can translate it to SQL.
+        [HttpGet("by-invoice/{invoiceNo}")]
+        public async Task<ActionResult<IEnumerable<Log>>> GetLogsByInvoice(string invoiceNo)
+        {
+            if (string.IsNullOrWhiteSpace(invoiceNo))
+            {
+                return BadRequest("invoiceNo is required.");
+            }
+
+            var candidates = BuildZeroPaddedCandidates(invoiceNo);
+            if (candidates.Count == 0)
+            {
+                return Ok(Array.Empty<Log>());
+            }
+
+            var results = await _context.Logs
+                .Where(l => l.InvoiceNo != null && candidates.Contains(l.InvoiceNo))
+                .OrderByDescending(l => l.DateLogged)
+                .ToListAsync();
+
+            return Ok(results);
+        }
+
+        // Builds a list of zero-padded variants of the input, e.g. for "450321"
+        // => ["450321", "0450321", "00450321", ..., up to MaxPaddedLength chars].
+        // This lets us do an indexed IN comparison instead of a non-SARGable
+        // TRIM on the column.
+        private static List<string> BuildZeroPaddedCandidates(string input)
+        {
+            const int MaxPaddedLength = 20;
+            var trimmed = input.Trim().TrimStart('0');
+            var list = new List<string>();
+
+            if (trimmed.Length == 0)
+            {
+                // Input was all zeros (or empty) - match stored all-zero or empty values.
+                list.Add(string.Empty);
+                for (var i = 1; i <= MaxPaddedLength; i++)
+                {
+                    list.Add(new string('0', i));
+                }
+                return list;
+            }
+
+            list.Add(trimmed);
+            for (var len = trimmed.Length + 1; len <= MaxPaddedLength; len++)
+            {
+                list.Add(trimmed.PadLeft(len, '0'));
+            }
+            return list;
         }
 
         // GET: api/Logs/5

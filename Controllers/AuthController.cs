@@ -22,8 +22,8 @@ public class AuthController : ControllerBase
     private readonly ILogger<AuthController> _logger;
 
     public AuthController(
-        UserManager<User> userManager, 
-        SignInManager<User> signInManager, 
+        UserManager<User> userManager,
+        SignInManager<User> signInManager,
         IConfiguration configuration,
         IEmailService emailService,
         ILogger<AuthController> logger)
@@ -43,12 +43,11 @@ public class AuthController : ControllerBase
 
         var user = new User
         {
-            UserName = dto.Email,
+            UserName = dto.Username ?? dto.Email,
             Email = dto.Email,
             Name = dto.Name,
             Role = dto.Role,
-            Team = dto.Team,
-            EmailConfirmed = true // adjust as needed
+            Team = dto.Team
         };
 
         var result = await _userManager.CreateAsync(user, dto.Password);

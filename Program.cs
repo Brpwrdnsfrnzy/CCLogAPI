@@ -47,8 +47,11 @@ origins.Add("http://localhost:5000");
 origins.Add("http://localhost:5001");
 // Known front-end origins (production and staging)
 origins.Add("http://cclogs.net");
+origins.Add("https://cclogs.net");
 origins.Add("http://www.cclogs.net");
+origins.Add("https://www.cclogs.net");
 origins.Add("http://staging.cclogs.net");
+origins.Add("https://staging.cclogs.net");
 origins = origins.Where(s => !string.IsNullOrWhiteSpace(s)).Distinct().ToList();
 
 builder.Services.AddCors(options =>
@@ -67,17 +70,27 @@ builder.Services.AddCors(options =>
 // AutoMapper
 builder.Services.AddAutoMapper(typeof(MappingProfile));
 
-// Register EF DbContext using DefaultConnection if available; otherwise rely on CCLogContext.OnConfiguring fallback
+// Register EF DbContext using DefaultConnection (required)
 var conn = builder.Configuration.GetConnectionString("DefaultConnection");
-if (!string.IsNullOrWhiteSpace(conn))
-{
-    builder.Services.AddDbContext<CCLogContext>(options => options.UseSqlServer(conn));
-}
+if (string.IsNullOrWhiteSpace(conn))
+    throw new InvalidOperationException("Missing required connection string 'ConnectionStrings:DefaultConnection'.");
+
+builder.Services.AddDbContext<CCLogContext>(options =>
+    options.UseSqlServer(conn, sqlOptions =>
+        sqlOptions.EnableRetryOnFailure(
+            maxRetryCount: 5,
+            maxRetryDelay: TimeSpan.FromSeconds(10),
+            errorNumbersToAdd: null)));
 // Register read-only Sage DB context if configured
 var sageConn = builder.Configuration.GetConnectionString("SageConnection");
 if (!string.IsNullOrWhiteSpace(sageConn))
 {
-    builder.Services.AddDbContext<SageContext>(options => options.UseSqlServer(sageConn));
+    builder.Services.AddDbContext<SageContext>(options =>
+        options.UseSqlServer(sageConn, sqlOptions =>
+            sqlOptions.EnableRetryOnFailure(
+                maxRetryCount: 5,
+                maxRetryDelay: TimeSpan.FromSeconds(10),
+                errorNumbersToAdd: null)));
 }
 
 // Register ASP.NET Core Identity using the EF Core context with int keys
@@ -92,6 +105,10 @@ builder.Services.AddIdentity<User, IdentityRole<int>>(options =>
 // Email service configuration
 builder.Services.Configure<EmailSettings>(builder.Configuration.GetSection("Email"));
 builder.Services.AddScoped<IEmailService, EmailService>();
+builder.Services.AddScoped<DailyReportJob>();
+builder.Services.AddScoped<ReminderCheckJob>();
+builder.Services.AddScoped<EscalationCheckJob>();
+builder.Services.AddHostedService<DailyReportScheduler>();
 
 var app = builder.Build();
 
@@ -114,6 +131,15 @@ try
             if (canConnect)
             {
                 startupLogger?.LogInformation("Database connectivity check passed.");
+
+                var pendingMigrations = db.Database.GetPendingMigrations().ToList();
+                if (pendingMigrations.Count > 0)
+                {
+                    startupLogger?.LogInformation("Applying {Count} pending migration(s): {Migrations}",
+                        pendingMigrations.Count, string.Join(", ", pendingMigrations));
+                    db.Database.Migrate();
+                    startupLogger?.LogInformation("Database migrations applied successfully.");
+                }
             }
             else
             {
@@ -128,7 +154,7 @@ try
 }
 catch (Exception ex)
 {
-    // Ensure any unexpected error during startup checks is logged but does not crash the host.
+    // Ensure unexpected startup check failures are logged but do not prevent API startup.
     var tmpLogger = app.Services.GetService<ILoggerFactory>()?.CreateLogger("StartupChecks");
     tmpLogger?.LogError(ex, "Unexpected error during startup health checks.");
 }

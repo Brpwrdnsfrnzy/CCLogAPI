@@ -14,17 +14,31 @@ namespace CCLogAPI.Controllers
     public class LogStatusController : ControllerBase
     {
         private readonly CCLogContext _context;
+        private readonly ILogger<LogStatusController> _logger;
 
-        public LogStatusController(CCLogContext context)
+        public LogStatusController(CCLogContext context, ILogger<LogStatusController> logger)
         {
             _context = context;
+            _logger = logger;
         }
 
         // GET: api/LogStatus
         [HttpGet]
         public async Task<ActionResult<IEnumerable<LogStatus>>> GetLogStatuses()
         {
-            return await _context.LogStatuses.ToListAsync();
+            try
+            {
+                return await _context.LogStatuses
+                    .AsNoTracking()
+                    .OrderBy(ls => ls.OrderBy)
+                    .ThenBy(ls => ls.Name)
+                    .ToListAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to load LogStatus list.");
+                return StatusCode(500, new { error = "Failed to load log statuses.", details = ex.GetBaseException().Message });
+            }
         }
 
         // GET: api/LogStatus/5

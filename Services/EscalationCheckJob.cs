@@ -7,8 +7,8 @@ namespace CCLogAPI.Services;
 public class EscalationCheckJob
 {
     private const int SignedOffStatusId = 8;
-    private const string EscalationToEmail = "cspiers@brisant-secure.com";
-    private const string EscalationCcEmail = "rlockwood@brisant-secure.com";
+    private const string EscalationToEmail = "craig.spiers@allegion.com";
+    private const string EscalationCcEmail = "richard.lockwood@allegion.com";
 
     private readonly CCLogContext _context;
     private readonly IEmailService _emailService;

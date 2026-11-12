@@ -189,6 +189,33 @@ public class AuthController : ControllerBase
         if (user == null)
             return NotFound(new { message = "User not found." });
 
+        // Trim potentially dirty values from imported or pasted emails/usernames
+        var trimmedEmail = user.Email?.Trim();
+        var trimmedUserName = user.UserName?.Trim();
+        var needUpdate = false;
+        if (trimmedEmail != user.Email)
+        {
+            user.Email = trimmedEmail;
+            user.NormalizedEmail = trimmedEmail?.ToUpperInvariant();
+            needUpdate = true;
+        }
+        if (trimmedUserName != user.UserName)
+        {
+            user.UserName = trimmedUserName;
+            user.NormalizedUserName = trimmedUserName?.ToUpperInvariant();
+            needUpdate = true;
+        }
+
+        if (needUpdate)
+        {
+            var updateResult = await _userManager.UpdateAsync(user);
+            if (!updateResult.Succeeded)
+            {
+                var errors = updateResult.Errors.Select(e => e.Description);
+                return BadRequest(new { message = "Failed to normalize user data.", errors = errors });
+            }
+        }
+
         // Remove existing password if one exists
         if (await _userManager.HasPasswordAsync(user))
         {

@@ -57,12 +57,11 @@ public partial class CCLogContext : IdentityDbContext<User, IdentityRole<int>, i
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
-        // Only configure if not already configured (allows Program.cs to override)
+        // Runtime must provide DbContext options via DI in Program.cs.
+        // Do not silently fall back to a hardcoded connection string.
         if (!optionsBuilder.IsConfigured)
         {
-#warning To protect potentially sensitive information in your connection string, you should move it out of source code. You can avoid scaffolding the connection string by using the Name= syntax to read it from configuration - see https://go.microsoft.com/fwlink/?linkid=2131148. For more guidance on storing connection strings, see https://go.microsoft.com/fwlink/?LinkId=723263.
-            // Fallback for development/testing only
-            optionsBuilder.UseSqlServer("Data Source=brisant-SQL01;Initial Catalog=CCLog;User Id=CCLogAPI_User;Password=sheep!!dog97;Encrypt=True;TrustServerCertificate=True");
+            throw new InvalidOperationException("CCLogContext is not configured. Ensure ConnectionStrings:DefaultConnection is provided and AddDbContext<CCLogContext> is registered.");
         }
     }
 

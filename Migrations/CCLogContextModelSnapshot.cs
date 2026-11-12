@@ -391,6 +391,10 @@ namespace CCLogAPI.Migrations
                     b.Property<int>("AccessFailedCount")
                         .HasColumnType("int");
 
+                    b.Property<bool>("Assignable")
+                        .HasColumnType("bit")
+                        .HasColumnName("Assignable");
+
                     b.Property<string>("ConcurrencyStamp")
                         .IsConcurrencyToken()
                         .HasColumnType("nvarchar(max)");

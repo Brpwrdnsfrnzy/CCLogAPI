@@ -10,6 +10,10 @@ public class SearchLogsRequest
     // client sends camelCase 'userId'
     public int? UserId { get; set; }
 
+    // Optional: filter by the assigned user id (matches Log.AssignedTo).
+    // Some front-ends send this as 'assignedUserId'.
+    public int? AssignedUserId { get; set; }
+
     // Optional: customer account (partial match)
     public string? CustomerAccount { get; set; }
 
@@ -21,6 +25,9 @@ public class SearchLogsRequest
 
     // Optional: status id to filter logs by their status
     public int? StatusId { get; set; }
+
+    // Optional: allow multiple status ids to be supplied by the client
+    public List<int>? StatusIds { get; set; }
 
     // Optional: log type id to filter logs by their type
     public int? LogTypeId { get; set; }

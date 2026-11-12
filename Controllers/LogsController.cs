@@ -27,10 +27,10 @@ namespace CCLogAPI.Controllers
 
     // POST: api/Logs/search
     [HttpPost("search")]
-    public async Task<ActionResult<IEnumerable<Log>>> SearchLogs(SearchLogsRequest req)
+    public async Task<ActionResult> SearchLogs(SearchLogsRequest req)
     {
         // Basic server-side search implementation. All filters are optional.
-        _logger?.LogInformation($"SearchLogs request: Id={req.Id}, UserId={req.UserId}, CustomerAccount={req.CustomerAccount}, Text={req.Text}, StatusId={req.StatusId}, LogTypeId={req.LogTypeId}, AssignedTeamId={req.AssignedTeamId}, DateFrom={req.DateFrom}, DateTo={req.DateTo}, Completed={req.Completed}, ReportedIssueId={req.ReportedIssueId}, SubIssue={req.SubIssue}, Page={req.Page}, PageSize={req.PageSize}");
+        _logger?.LogInformation($"SearchLogs request: Id={req.Id}, UserId={req.UserId}, AssignedUserId={req.AssignedUserId}, CustomerAccount={req.CustomerAccount}, Text={req.Text}, StatusId={req.StatusId}, StatusIdsCount={(req.StatusIds==null?0:req.StatusIds.Count)}, LogTypeId={req.LogTypeId}, AssignedTeamId={req.AssignedTeamId}, DateFrom={req.DateFrom}, DateTo={req.DateTo}, Completed={req.Completed}, ReportedIssueId={req.ReportedIssueId}, SubIssue={req.SubIssue}, Page={req.Page}, PageSize={req.PageSize}");
 
         var q = _context.Logs.AsQueryable();
         // Normalize date range: if both provided but DateTo is earlier than DateFrom, swap them
@@ -90,7 +90,13 @@ namespace CCLogAPI.Controllers
                 q = q.Where(l => !l.SignOffDate.HasValue);
         }
 
-        if (req.StatusId.HasValue)
+        // Support multiple status filters (client may send statusIds array)
+        if (req.StatusIds != null && req.StatusIds.Any())
+        {
+            var sids = req.StatusIds;
+            q = q.Where(l => sids.Contains(l.Status));
+        }
+        else if (req.StatusId.HasValue)
         {
             var sid = req.StatusId.Value;
             q = q.Where(l => l.Status == sid);
@@ -102,7 +108,13 @@ namespace CCLogAPI.Controllers
             q = q.Where(l => l.LogType == lt);
         }
 
-        if (req.AssignedTeamId.HasValue)
+        // Filter by assigned user or assigned user's team
+        if (req.AssignedUserId.HasValue)
+        {
+            var assignedUser = req.AssignedUserId.Value;
+            q = q.Where(l => l.AssignedTo == assignedUser);
+        }
+        else if (req.AssignedTeamId.HasValue)
         {
             var teamId = req.AssignedTeamId.Value;
             // Filter logs where the AssignedTo user's Team matches the requested team
@@ -145,12 +157,20 @@ namespace CCLogAPI.Controllers
         // Order by DateLogged desc by default
         q = q.OrderByDescending(l => l.DateLogged);
 
-        // Simple paging
+        // Simple paging with total count in the response so clients can page correctly
         var page = Math.Max(1, req.Page);
         var pageSize = Math.Clamp(req.PageSize, 1, 1000);
 
+        var totalCount = await q.CountAsync();
         var results = await q.Skip((page - 1) * pageSize).Take(pageSize).ToListAsync();
-        return Ok(results);
+
+        return Ok(new
+        {
+            totalCount,
+            page,
+            pageSize,
+            results
+        });
     }
 
         // GET: api/Logs

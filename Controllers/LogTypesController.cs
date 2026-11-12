@@ -14,17 +14,30 @@ namespace CCLogAPI.Controllers
     public class LogTypesController : ControllerBase
     {
         private readonly CCLogContext _context;
+        private readonly ILogger<LogTypesController> _logger;
 
-        public LogTypesController(CCLogContext context)
+        public LogTypesController(CCLogContext context, ILogger<LogTypesController> logger)
         {
             _context = context;
+            _logger = logger;
         }
 
         // GET: api/LogTypes
         [HttpGet]
         public async Task<ActionResult<IEnumerable<LogType>>> GetLogTypes()
         {
-            return await _context.LogTypes.ToListAsync();
+            try
+            {
+                return await _context.LogTypes
+                    .AsNoTracking()
+                    .OrderBy(lt => lt.Name)
+                    .ToListAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to load LogTypes.");
+                return StatusCode(500, new { error = "Failed to load log types.", details = ex.GetBaseException().Message });
+            }
         }
 
         // GET: api/LogTypes/5

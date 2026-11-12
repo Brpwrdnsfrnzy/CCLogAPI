@@ -79,8 +79,8 @@ public class ReportsController : ControllerBase
         {
             using var scope = HttpContext.RequestServices.CreateScope();
             var job = scope.ServiceProvider.GetRequiredService<ReminderCheckJob>();
-            await job.RunAsync(overrideEmail: "rlockwood@brisant-secure.com");
-            return Ok(new { message = "Reminder check completed — all emails sent to rlockwood@brisant-secure.com." });
+            await job.RunAsync(overrideEmail: "richard.lockwood@allegion.com");
+            return Ok(new { message = "Reminder check completed — all emails sent to richard.lockwood@allegion.com." });
         }
         catch (Exception ex)
         {
@@ -98,8 +98,8 @@ public class ReportsController : ControllerBase
         {
             using var scope = HttpContext.RequestServices.CreateScope();
             var job = scope.ServiceProvider.GetRequiredService<EscalationCheckJob>();
-            await job.RunAsync(overrideEmail: "rlockwood@brisant-secure.com");
-            return Ok(new { message = "Escalation check completed — all emails sent to rlockwood@brisant-secure.com." });
+            await job.RunAsync(overrideEmail: "richard.lockwood@allegion.com");
+            return Ok(new { message = "Escalation check completed — all emails sent to richard.lockwood@allegion.com." });
         }
         catch (Exception ex)
         {

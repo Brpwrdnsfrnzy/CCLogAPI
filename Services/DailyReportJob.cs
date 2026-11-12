@@ -32,7 +32,7 @@ public class DailyReportJob
         var body = BuildHtmlBody(openLogs);
 
         // Get recipient and CC addresses from configuration
-        var recipient = _configuration["DailyReport:Recipient"] ?? "rlockwood@brisant-secure.com";
+        var recipient = _configuration["DailyReport:Recipient"] ?? "richard.lockwood@allegion.com";
         var ccAddress = _configuration["DailyReport:CcAddress"];
 
         await _emailService.SendAsync(recipient, subject, body, ccAddress);
